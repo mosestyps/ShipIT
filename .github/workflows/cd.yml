@@ -1,0 +1,54 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - id: vars
+        run: |
+          SHA=${{ github.event.workflow_run.head_sha }}
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:${SHA::7}" >> $GITHUB_OUTPUT
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: shipit
+
+      - name: Pull image and load into cluster
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull ${{ steps.vars.outputs.image }}
+          kind load docker-image ${{ steps.vars.outputs.image }} --name shipit
+
+      - name: Deploy
+        run: |
+          kubectl apply -f k8s/
+          kubectl set image deployment/shipit shipit=${{ steps.vars.outputs.image }}
+          kubectl rollout status deployment/shipit --timeout=120s
+
+      - name: Verify 3 replicas
+        run: |
+          kubectl get deployment shipit
+          test "$(kubectl get deployment shipit -o jsonpath='{.status.readyReplicas}')" = "3"
+
+      - name: Smoke test
+        run: |
+          kubectl port-forward svc/shipit 8080:80 &
+          sleep 5
+          curl --fail http://localhost:8080/health
