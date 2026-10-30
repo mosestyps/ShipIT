@@ -1,3 +1,4 @@
+cat > .github/workflows/cd.yml <<'EOF'
 name: CD
 
 on:
@@ -42,6 +43,13 @@ jobs:
           kubectl set image deployment/shipit shipit=${{ steps.vars.outputs.image }}
           kubectl rollout status deployment/shipit --timeout=120s
 
+      - name: Show diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -o wide
+          kubectl describe deployment shipit
+          kubectl logs -l app=shipit --tail=50
+
       - name: Verify 3 replicas
         run: |
           kubectl get deployment shipit
@@ -52,3 +60,4 @@ jobs:
           kubectl port-forward svc/shipit 8080:80 &
           sleep 5
           curl --fail http://localhost:8080/health
+EOF
